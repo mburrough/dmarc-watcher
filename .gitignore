@@ -1,0 +1,13 @@
+# Local configuration: contains your own address and folder names
+config.toml
+
+# Runtime data (lives in %APPDATA% by default, but never commit a stray copy)
+*.db
+*.log
+last-details.txt
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/

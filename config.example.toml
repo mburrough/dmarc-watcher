@@ -1,0 +1,47 @@
+# Copy to config.toml (next to this file) or to
+# %APPDATA%\dmarc-watcher\config.toml
+
+[general]
+domain = "example.com"
+poll_minutes = 60          # how often to check
+summary_days = 30          # window for the hover tooltip and details view
+stale_days = 10            # no reports for this long => grey "check the rule" icon
+
+# Proton Bridge and this app usually both launch from the Startup folder, and
+# Bridge needs time to sign in before it listens. For this long after start,
+# a connection failure is treated as "still waiting" -- grey icon, no toast,
+# retried every retry_seconds. Ends early once any check succeeds.
+startup_grace_minutes = 10
+retry_seconds = 30
+notify_on_clean = false    # true = toast on every check, even when clean
+retain_days = 0            # 0 = keep every report forever (recommended).
+                           # Reports are never re-sent by reporters, and the
+                           # IMAP UID pointer means a deleted one is not
+                           # re-fetched, so pruning is irreversible.
+
+[source]
+mode = "imap"              # "imap" or "folder"
+
+# Proton Mail Bridge defaults. Bridge listens on loopback only.
+# Custom Proton folders appear under a "Folders/" prefix over IMAP --
+# run `py -m dmarc_watcher --list-folders` to see the exact name.
+[imap]
+host = "127.0.0.1"
+port = 1143
+user = "you@example.com"   # <<< REPLACE: exact address from the Bridge window
+folder = "Folders/DMARC"
+security = "starttls"      # "starttls" | "ssl" | "none"
+verify_cert = false        # Bridge uses a locally-generated certificate
+
+# After a report is parsed and stored, flag it \Seen in Proton.
+#   "never" - leave everything unread (default)
+#   "all"   - mark every processed report read
+#   "clean" - mark only passing reports read, so failures stay bold
+mark_read = "all"
+
+# Password is NOT stored here. Run:
+#   py -m dmarc_watcher --set-password
+
+# Used only when mode = "folder": watch a directory of saved report files.
+[folder]
+path = 'C:\path\to\saved-reports'
