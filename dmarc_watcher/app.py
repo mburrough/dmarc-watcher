@@ -88,8 +88,10 @@ class DmarcTray:
         return Menu(
             MenuItem(lambda _: self._status_line(), None, enabled=False),
             Menu.SEPARATOR,
-            MenuItem("Check now", self._on_check_now, default=True),
-            MenuItem("Open dashboard…", self._on_details),
+            # The dashboard is the default action: clicking the icon is almost
+            # always "show me what this state means", not "poll again now".
+            MenuItem("Open dashboard…", self._on_details, default=True),
+            MenuItem("Check now", self._on_check_now),
             Menu.SEPARATOR,
             MenuItem("Open log", self._on_open_log),
             MenuItem("Quit", self._on_quit),
