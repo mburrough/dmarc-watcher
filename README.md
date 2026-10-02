@@ -93,6 +93,32 @@ listening yet, or its post-failure rate limit. Configuration errors (unknown
 user, wrong password, placeholder config) alert immediately, because waiting
 would not fix them.
 
+## Reading destinations
+
+```bash
+py -3 -m dmarc_watcher --destinations
+```
+
+Groups traffic by recipient domain. The useful signal is a destination showing
+**both** passes and failures:
+
+```
+  windermere.com        6 msgs, 3 failed   <-- FAILING
+  graebel.com           2 msgs, 0 failed
+```
+
+That pattern is almost always a forwarder, not mail you cannot deliver. Your
+message arrives directly and passes; the recipient's infrastructure relays a
+copy, which breaks the DKIM signature and fails SPF, and the copy is rejected.
+A destination showing *only* failures is the one worth investigating.
+
+`envelope_to` is recorded only for reports received after the field was added,
+and many reporters (Google among them) never send it at all. `--backfill`
+re-reads the folder and fills it in on older records. It is read-only against
+the mailbox -- `BODY.PEEK`, nothing marked read, the UID pointer untouched --
+writes only the two envelope columns on rows that have never had them, and is
+idempotent, so a second run reports zero.
+
 ## Uninstalling
 
 ```bash
@@ -128,6 +154,8 @@ py -3 -m dmarc_watcher --import-dir C:\path\to\saved-reports
 | `--list-folders` | list IMAP folders |
 | `--set-password` | store the IMAP password |
 | `--days N` | window for summaries (default 30) |
+| `--destinations` | group traffic by recipient domain (`envelope_to`) |
+| `--backfill` | re-read the folder and fill envelope fields on older records |
 | `--resync` | forget IMAP UID pointers and re-read the whole folder |
 
 `--check` exits **1** when failures are present, so it also works from Task

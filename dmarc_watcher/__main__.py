@@ -74,6 +74,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--set-password", action="store_true",
                     help="store the IMAP password in Windows Credential Manager")
     ap.add_argument("--days", type=int, help="window for summaries")
+    ap.add_argument("--destinations", action="store_true",
+                    help="group traffic by recipient domain (envelope_to)")
+    ap.add_argument("--backfill", action="store_true",
+                    help="re-read the folder and fill envelope columns on "
+                         "records stored before they were captured")
     ap.add_argument("--resync", action="store_true",
                     help="forget IMAP UID pointers and re-read the whole "
                          "folder (duplicates are skipped on the way in)")
@@ -106,6 +111,39 @@ def main(argv: list[str] | None = None) -> int:
 
     store = Store(config.db_path())
     try:
+        if args.destinations:
+            rows = store.destinations(days)
+            if not rows:
+                print(f"No records in the last {days} days.")
+                return 0
+            print(f"Destinations, last {days} days:")
+            for row in rows:
+                flag = "   <-- FAILING" if row["failed"] else ""
+                print(f"  {row['dest']:28} {row['msgs']:5} msgs,"
+                      f" {row['failed']} failed{flag}")
+            print("\nA destination showing both passes and failures is usually a"
+                  "\nforwarder re-presenting your mail, not mail you cannot deliver.")
+            return 0
+
+        if args.backfill:
+            # Never flag mail as read while re-reading it for a backfill.
+            cfg["imap"] = dict(cfg["imap"], mark_read="never")
+            try:
+                source = build_source(cfg, store)
+                updated = scanned = 0
+                with source.session():
+                    for msg in source.fetch_all():
+                        for name, payload in msg.attachments:
+                            for rep in parse_any(payload, name):
+                                scanned += 1
+                                updated += store.backfill_envelopes(rep)
+            except FetchError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 2
+            print(f"Re-read {scanned} report(s); filled envelope fields on "
+                  f"{updated} record(s).")
+            return 0
+
         if args.resync:
             n = store.reset_imap_state()
             print(f"Cleared {n} UID pointer(s). The next --check re-reads "

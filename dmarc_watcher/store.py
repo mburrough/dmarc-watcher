@@ -191,6 +191,43 @@ class Store:
                 " WHERE rep.end_ts >= ? GROUP BY rec.source_ip"
                 " ORDER BY msgs DESC LIMIT ?", (cutoff, limit)).fetchall()
 
+    def destinations(self, days: int = 30, limit: int = 25) -> list[sqlite3.Row]:
+        """Group traffic by recipient domain.
+
+        Pairing passes and failures per destination is what distinguishes a
+        forwarder re-presenting your mail from a destination you cannot reach:
+        the former shows both, the latter only failures.
+        """
+        cutoff = int(time.time()) - days * 86400
+        with self._lock:
+            return self._db.execute(
+                "SELECT COALESCE(NULLIF(rec.envelope_to, ''), '(not reported)')"
+                "   AS dest, SUM(rec.count) AS msgs,"
+                " SUM(CASE WHEN rec.passed = 0 THEN rec.count ELSE 0 END) AS failed"
+                " FROM records rec JOIN reports rep ON rep.key = rec.report_key"
+                " WHERE rep.end_ts >= ? GROUP BY dest"
+                " ORDER BY msgs DESC LIMIT ?", (cutoff, limit)).fetchall()
+
+    def backfill_envelopes(self, rep: Report) -> int:
+        """Fill envelope columns on records stored before they existed.
+
+        Only touches rows never written before, which the migration left as
+        NULL. Writing even an empty string marks a row as visited, so a record
+        the reporter gave no identifiers for is not re-examined on every run
+        and a second pass reports zero.
+        """
+        with self._lock:
+            updated = 0
+            for r in rep.records:
+                cur = self._db.execute(
+                    "UPDATE records SET envelope_from = ?, envelope_to = ?"
+                    " WHERE report_key = ? AND source_ip = ? AND count = ?"
+                    "   AND envelope_from IS NULL AND envelope_to IS NULL",
+                    (r.envelope_from, r.envelope_to, rep.key, r.source_ip, r.count))
+                updated += cur.rowcount
+            self._db.commit()
+            return updated
+
     def prune(self, keep_days: int = 0) -> int:
         """Delete reports older than keep_days. 0 (the default) keeps everything.
 

@@ -258,6 +258,30 @@ class ImapSource:
             self.store.set_state(uid_key, str(highest))
         return out
 
+    def fetch_all(self) -> list[FetchedMessage]:
+        """Every message in the folder, ignoring the UID pointer.
+
+        For re-reading already-processed mail (a backfill). Deliberately does
+        not advance the pointer, so a normal check afterwards behaves exactly
+        as it would have.
+        """
+        conn = self._require_conn()
+        typ, resp = conn.uid("SEARCH", None, "ALL")
+        if typ != "OK":
+            raise FetchError("UID SEARCH failed")
+        out: list[FetchedMessage] = []
+        for uid in sorted(int(u) for u in resp[0].split()):
+            typ, msg_data = conn.uid("FETCH", str(uid), "(BODY.PEEK[])")
+            if typ != "OK" or not msg_data or not msg_data[0]:
+                continue
+            raw = msg_data[0][1]
+            if not isinstance(raw, (bytes, bytearray)):
+                continue
+            msg = email.message_from_bytes(bytes(raw))
+            out.append(FetchedMessage(uid=uid,
+                                      attachments=list(_attachment_parts(msg))))
+        return out
+
     def mark_read_uids(self, uids: list[int]) -> int:
         """Set \\Seen on the given UIDs. Returns how many were flagged."""
         wanted = sorted({u for u in uids if u is not None})
@@ -293,6 +317,9 @@ class FolderSource:
                 out.append(FetchedMessage(uid=None,
                                           attachments=[(f.name, f.read_bytes())]))
         return out
+
+    def fetch_all(self) -> list[FetchedMessage]:
+        return self.fetch_new()
 
     def mark_read_uids(self, uids: list[int]) -> int:
         return 0
