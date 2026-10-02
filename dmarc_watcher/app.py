@@ -15,6 +15,7 @@ import pystray
 from pystray import Menu, MenuItem
 
 from . import config, icons
+from .dashboard import Dashboard
 from .fetch import FetchError, TransientFetchError, build_source, collect
 from .store import Store, Summary
 
@@ -69,6 +70,9 @@ class DmarcTray:
         self.grace_attempts = 0
         self._started_at = time.monotonic()
         self.consecutive_errors = 0
+        self._dashboard = Dashboard(self.store, self.domain,
+                                    self.summary_days,
+                                    on_change=self._on_dashboard_change)
         self._stop = threading.Event()
         self._checking = threading.Lock()
 
@@ -85,7 +89,7 @@ class DmarcTray:
             MenuItem(lambda _: self._status_line(), None, enabled=False),
             Menu.SEPARATOR,
             MenuItem("Check now", self._on_check_now, default=True),
-            MenuItem("Show details…", self._on_details),
+            MenuItem("Open dashboard…", self._on_details),
             Menu.SEPARATOR,
             MenuItem("Open log", self._on_open_log),
             MenuItem("Quit", self._on_quit),
@@ -151,7 +155,17 @@ class DmarcTray:
             self.last_check = datetime.now()
             self.last_problems = res.problems
 
+            muted = self.store.apply_mutes()
+            if muted:
+                log.info("auto-acknowledged %d record(s) by mute rule", muted)
             failing = [r for r in new_reports if not r.is_clean]
+            # A mute means "I already know about this source", so a report
+            # whose failures were all auto-acknowledged must not re-alert.
+            if failing and not self.store.unacked_failures_for(
+                    [r.key for r in failing]):
+                log.info("all %d new failing report(s) acknowledged by mute",
+                         len(failing))
+                failing = []
             log.info("check ok: %d new, %d duplicate, %d failing, %d marked read,"
                      " %d unparseable", len(new_reports), res.duplicates,
                      len(failing), res.marked_read, res.unparseable_messages)
@@ -244,12 +258,22 @@ class DmarcTray:
                          daemon=True).start()
 
     def _on_details(self, icon=None, item=None) -> None:
-        # One reused file rather than a fresh temp file per click, which would
-        # accumulate in %TEMP% for the life of the machine.
-        path = config.app_dir() / "last-details.txt"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self._details_text(), encoding="utf-8")
-        self._open(str(path))
+        try:
+            self._dashboard.open()
+        except Exception:
+            log.exception("could not open dashboard; falling back to a text file")
+            path = config.app_dir() / "last-details.txt"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(self._details_text(), encoding="utf-8")
+            self._open(str(path))
+
+    def _on_dashboard_change(self) -> None:
+        """Called after an ack or mute, so the icon reflects it at once rather
+        than at the next poll."""
+        try:
+            self._refresh_ui()
+        except Exception:
+            log.exception("failed to refresh tray after dashboard change")
 
     def _details_text(self) -> str:
         s = self.store.summary(self.summary_days)
@@ -311,6 +335,7 @@ class DmarcTray:
 
     def _on_quit(self, icon=None, item=None) -> None:
         log.info("quitting")
+        self._dashboard.stop()
         self._stop.set()
         self.icon.visible = False
         self.icon.stop()

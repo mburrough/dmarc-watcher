@@ -98,9 +98,16 @@ class Store:
         keep NULL; nothing is rewritten and no history is touched.
         """
         have = {r["name"] for r in self._db.execute("PRAGMA table_info(records)")}
-        for column in ("envelope_from", "envelope_to"):
+        for column, decl in (("envelope_from", "TEXT"), ("envelope_to", "TEXT"),
+                             ("acked_at", "INTEGER"), ("ack_note", "TEXT")):
             if column not in have:
-                self._db.execute(f"ALTER TABLE records ADD COLUMN {column} TEXT")
+                self._db.execute(f"ALTER TABLE records ADD COLUMN {column} {decl}")
+        self._db.execute(
+            "CREATE TABLE IF NOT EXISTS mutes ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " source_ip TEXT NOT NULL DEFAULT '',"   # '' = any
+            " envelope_to TEXT NOT NULL DEFAULT '',"  # '' = any
+            " note TEXT, created_at INTEGER)")
 
     def close(self) -> None:
         with self._lock:
@@ -153,15 +160,29 @@ class Store:
 
     # -- rollups --------------------------------------------------------
     def summary(self, days: int = 30) -> Summary:
+        """Totals for the window, computed from records rather than the
+        denormalised per-report counts, because acknowledging a single record
+        has to change them.
+
+        An acknowledged failure means "I know, and it is expected", so it stops
+        counting toward the tray's state while staying visible in the data.
+        """
         cutoff = int(time.time()) - days * 86400
         with self._lock:
             row = self._db.execute(
                 "SELECT COUNT(*) AS n,"
-                " SUM(CASE WHEN failed_messages = 0 THEN 1 ELSE 0 END) AS clean,"
-                " COALESCE(SUM(total_messages),0) AS msgs,"
-                " COALESCE(SUM(failed_messages),0) AS failed,"
-                " COALESCE(SUM(enforced_messages),0) AS enforced"
-                " FROM reports WHERE end_ts >= ?", (cutoff,)).fetchone()
+                " COALESCE(SUM(r.msgs),0) AS msgs,"
+                " COALESCE(SUM(r.failed),0) AS failed,"
+                " COALESCE(SUM(r.enforced),0) AS enforced,"
+                " COALESCE(SUM(CASE WHEN r.failed = 0 THEN 1 ELSE 0 END),0) AS clean"
+                " FROM (SELECT rep.key AS k,"
+                "   COALESCE(SUM(rec.count),0) AS msgs,"
+                "   COALESCE(SUM(CASE WHEN rec.passed = 0 AND rec.acked_at IS NULL"
+                "     THEN rec.count ELSE 0 END),0) AS failed,"
+                "   COALESCE(SUM(CASE WHEN rec.disposition IN ('quarantine','reject')"
+                "     AND rec.acked_at IS NULL THEN rec.count ELSE 0 END),0) AS enforced"
+                "   FROM reports rep LEFT JOIN records rec ON rec.report_key = rep.key"
+                "   WHERE rep.end_ts >= ? GROUP BY rep.key) AS r", (cutoff,)).fetchone()
         return Summary(
             days=days,
             reports_total=row["n"] or 0,
@@ -171,15 +192,111 @@ class Store:
             messages_enforced=row["enforced"] or 0,
         )
 
-    def recent_failures(self, days: int = 30, limit: int = 50) -> list[sqlite3.Row]:
+    def recent_failures(self, days: int = 30, limit: int = 50,
+                        include_acked: bool = False) -> list[sqlite3.Row]:
         cutoff = int(time.time()) - days * 86400
+        ack_clause = "" if include_acked else " AND rec.acked_at IS NULL"
         with self._lock:
             return self._db.execute(
                 "SELECT rec.*, rep.org_name, rep.end_ts FROM records rec"
                 " JOIN reports rep ON rep.key = rec.report_key"
-                " WHERE rec.passed = 0 AND rep.end_ts >= ?"
+                f" WHERE rec.passed = 0 AND rep.end_ts >= ?{ack_clause}"
                 " ORDER BY rep.end_ts DESC, rec.count DESC LIMIT ?",
                 (cutoff, limit)).fetchall()
+
+    # -- acknowledgement -------------------------------------------------
+    def ack_records(self, ids: list[int], note: str = "") -> int:
+        """Mark failures as understood. Nothing is deleted or altered beyond
+        the two ack columns, so the underlying report data stays intact."""
+        if not ids:
+            return 0
+        with self._lock:
+            marks = ",".join("?" * len(ids))
+            cur = self._db.execute(
+                f"UPDATE records SET acked_at = ?, ack_note = ?"
+                f" WHERE id IN ({marks}) AND acked_at IS NULL",
+                [int(time.time()), note, *ids])
+            self._db.commit()
+            return cur.rowcount
+
+    def unack_records(self, ids: list[int]) -> int:
+        if not ids:
+            return 0
+        with self._lock:
+            marks = ",".join("?" * len(ids))
+            cur = self._db.execute(
+                f"UPDATE records SET acked_at = NULL, ack_note = NULL"
+                f" WHERE id IN ({marks})", [int(i) for i in ids])
+            self._db.commit()
+            return cur.rowcount
+
+    def unacked_failures_for(self, keys: list[str]) -> int:
+        """Failing messages still unacknowledged across the given reports.
+
+        Lets a caller tell "this report had failures" from "this report has
+        failures you have not already dismissed", which is the difference
+        between a useful alert and a repeat of one you muted.
+        """
+        if not keys:
+            return 0
+        with self._lock:
+            marks = ",".join("?" * len(keys))
+            row = self._db.execute(
+                f"SELECT COALESCE(SUM(count),0) AS n FROM records"
+                f" WHERE passed = 0 AND acked_at IS NULL"
+                f"   AND report_key IN ({marks})", list(keys)).fetchone()
+            return row["n"] or 0
+
+    # -- mutes -----------------------------------------------------------
+    def add_mute(self, source_ip: str = "", envelope_to: str = "",
+                 note: str = "") -> int:
+        """Auto-acknowledge matching failures, now and in future.
+
+        An empty field matches anything, so a recurring forwarder can be muted
+        by destination without pinning it to relay addresses that rotate.
+        """
+        with self._lock:
+            cur = self._db.execute(
+                "INSERT INTO mutes (source_ip, envelope_to, note, created_at)"
+                " VALUES (?,?,?,?)",
+                (source_ip.strip(), envelope_to.strip(), note, int(time.time())))
+            self._db.commit()
+            mute_id = cur.lastrowid
+        self.apply_mutes()
+        return mute_id
+
+    def list_mutes(self) -> list[sqlite3.Row]:
+        with self._lock:
+            return self._db.execute(
+                "SELECT * FROM mutes ORDER BY created_at DESC").fetchall()
+
+    def delete_mute(self, mute_id: int) -> int:
+        with self._lock:
+            cur = self._db.execute("DELETE FROM mutes WHERE id = ?", (mute_id,))
+            self._db.commit()
+            return cur.rowcount
+
+    def apply_mutes(self) -> int:
+        """Acknowledge unacked failures matching any mute. Returns how many."""
+        with self._lock:
+            rules = self._db.execute("SELECT * FROM mutes").fetchall()
+            total = 0
+            for rule in rules:
+                conds, params = ["passed = 0", "acked_at IS NULL"], []
+                if rule["source_ip"]:
+                    conds.append("source_ip = ?")
+                    params.append(rule["source_ip"])
+                if rule["envelope_to"]:
+                    conds.append("COALESCE(envelope_to,'') = ?")
+                    params.append(rule["envelope_to"])
+                note = f"muted: {rule['note'] or 'rule #' + str(rule['id'])}"
+                cur = self._db.execute(
+                    f"UPDATE records SET acked_at = ?, ack_note = ?"
+                    f" WHERE {' AND '.join(conds)}",
+                    [int(time.time()), note, *params])
+                total += cur.rowcount
+            self._db.commit()
+            return total
 
     def top_sources(self, days: int = 30, limit: int = 10) -> list[sqlite3.Row]:
         cutoff = int(time.time()) - days * 86400

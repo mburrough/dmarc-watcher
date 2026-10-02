@@ -93,6 +93,30 @@ listening yet, or its post-failure rate limit. Configuration errors (unknown
 user, wrong password, placeholder config) alert immediately, because waiting
 would not fix them.
 
+## Dashboard
+
+**Open dashboard...** in the tray menu serves a page on `127.0.0.1` and opens it
+in your browser. It lists unacknowledged failures with their authentication
+results and destinations, and lets you deal with them.
+
+**Acknowledge** marks a failure as understood. The record is kept and stays
+visible under *Acknowledged* (with an un-ack button), but it stops counting
+toward the tray state — so once a failure is explained, the icon goes back to
+green instead of staying red forever and training you to ignore it.
+
+**Mute** auto-acknowledges matching failures now and in future, matching on
+source IP and/or destination; a blank field matches anything. Use it for a
+benign source that will recur, such as a recipient whose mail system forwards
+your messages and breaks the signature. Removing a mute does not un-acknowledge
+what it already matched, since those acknowledgements are now facts about
+records you have seen.
+
+The server binds loopback on an ephemeral port and every request needs an
+unguessable token generated at startup, so the page is not reachable off the
+machine and another local process cannot guess the URL. It is not a Tkinter
+window because Tk must own the main thread and pystray's message loop already
+does.
+
 ## Reading destinations
 
 ```bash
