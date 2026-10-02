@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -274,6 +275,16 @@ class DmarcTray:
                 f" x{row['count']:<5} disp={row['disposition']:10}"
                 f" dkim={row['dkim_aligned']:5} spf={row['spf_aligned']:5}"
                 f" from={row['header_from']}")
+            try:
+                auth = json.loads(row["auth"]) or []
+            except (TypeError, ValueError):
+                auth = []
+            out.append(f"      auth: {'; '.join(auth) if auth else '(none reported)'}")
+            keys = row.keys()
+            env = "  ".join(f"{k}={row[k]}" for k in ("envelope_from", "envelope_to")
+                            if k in keys and row[k])
+            if env:
+                out.append(f"      {env}")
 
         out += ["", "Top sending sources"]
         for row in self.store.top_sources(self.summary_days):

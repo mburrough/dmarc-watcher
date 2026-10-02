@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import json
 import logging
 import sys
 from pathlib import Path
@@ -13,6 +14,20 @@ from .fetch import (PLACEHOLDER_USERS, FetchError, ImapSource, build_source,
                     collect)
 from .parser import parse_any
 from .store import Store
+
+
+def _envelope(row) -> str:
+    """Render envelope identifiers, tolerating rows and reports that lack them.
+
+    Many reporters omit envelope_to, and rows written before these columns
+    existed have NULL, so an absent value is normal rather than an error.
+    """
+    keys = row.keys() if hasattr(row, "keys") else []
+    bits = []
+    for label, key in (("envelope_from", "envelope_from"), ("envelope_to", "envelope_to")):
+        if key in keys and row[key]:
+            bits.append(f"{label}={row[key]}")
+    return "  ".join(bits)
 
 
 def _print_summary(store: Store, days: int) -> int:
@@ -29,6 +44,18 @@ def _print_summary(store: Store, days: int) -> int:
             print(f"  {row['org_name']:20} {row['source_ip']:16} x{row['count']:<4}"
                   f" disp={row['disposition']:10} dkim={row['dkim_aligned']:5}"
                   f" spf={row['spf_aligned']:5} from={row['header_from']}")
+            # The authenticating domain distinguishes an unauthorised sender
+            # from one that authenticated under its own domain and merely
+            # failed alignment. Different problems, different fixes.
+            try:
+                auth = json.loads(row["auth"]) or []
+            except (TypeError, ValueError):
+                auth = []
+            print(f"      auth: {'; '.join(auth) if auth else '(none reported)'}")
+            # NULL on rows stored before these columns existed.
+            env = _envelope(row)
+            if env:
+                print(f"      {env}")
     # Non-zero exit when something failed, so this is usable from a scheduler.
     return 1 if s.messages_failed else 0
 

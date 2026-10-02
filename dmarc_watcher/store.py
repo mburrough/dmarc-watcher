@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS records (
     dkim_aligned TEXT,
     spf_aligned  TEXT,
     header_from  TEXT,
+    envelope_from TEXT,
+    envelope_to  TEXT,
     passed       INTEGER,
     reasons      TEXT,
     auth         TEXT
@@ -85,7 +87,20 @@ class Store:
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA foreign_keys = ON")
         self._db.executescript(SCHEMA)
+        self._migrate()
         self._db.commit()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a database was first created.
+
+        SCHEMA uses CREATE TABLE IF NOT EXISTS, so an existing table never
+        picks up new columns on its own. Rows written before a column existed
+        keep NULL; nothing is rewritten and no history is touched.
+        """
+        have = {r["name"] for r in self._db.execute("PRAGMA table_info(records)")}
+        for column in ("envelope_from", "envelope_to"):
+            if column not in have:
+                self._db.execute(f"ALTER TABLE records ADD COLUMN {column} TEXT")
 
     def close(self) -> None:
         with self._lock:
@@ -120,9 +135,11 @@ class Store:
                     self._db.execute(
                         "INSERT INTO records (report_key, source_ip, count,"
                         " disposition, dkim_aligned, spf_aligned, header_from,"
-                        " passed, reasons, auth) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        " envelope_from, envelope_to, passed, reasons, auth)"
+                        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                         (rep.key, r.source_ip, r.count, r.disposition,
                          r.dkim_aligned, r.spf_aligned, r.header_from,
+                         r.envelope_from, r.envelope_to,
                          int(r.dmarc_pass), json.dumps(r.reasons),
                          json.dumps([a.describe() for a in r.auth])),
                     )
