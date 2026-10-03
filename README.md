@@ -9,13 +9,14 @@ something actually failed.
 - **Grey dash** — no reports recently (usually a broken mail rule or Bridge)
 - **Amber X** — the check itself failed (Bridge down, wrong folder, bad password)
 
-Hovering the tray icon shows a summary like:
+Hovering the tray icon shows a summary:
 
-```
-example.com
-14/14 reports clean (30d)
-Last check 15:04
-```
+![Tray icon and tooltip](docs/tray.png)
+
+Clicking it opens the dashboard, where failures are reviewed, acknowledged or
+muted:
+
+![Dashboard](docs/dashboard.png)
 
 ## Requirements
 
@@ -95,8 +96,8 @@ would not fix them.
 
 ## Dashboard
 
-**Open dashboard...** in the tray menu serves a page on `127.0.0.1` and opens it
-in your browser. It lists unacknowledged failures with their authentication
+Left-clicking the tray icon (or **Open dashboard...** in its menu) serves a page
+on `127.0.0.1` and opens it in your browser. It lists unacknowledged failures with their authentication
 results and destinations, and lets you deal with them.
 
 **Acknowledge** marks a failure as understood. The record is kept and stays
@@ -127,8 +128,8 @@ Groups traffic by recipient domain. The useful signal is a destination showing
 **both** passes and failures:
 
 ```
-  windermere.com        6 msgs, 3 failed   <-- FAILING
-  graebel.com           2 msgs, 0 failed
+  example.com           6 msgs, 3 failed   <-- FAILING
+  example.net           2 msgs, 0 failed
 ```
 
 That pattern is almost always a forwarder, not mail you cannot deliver. Your

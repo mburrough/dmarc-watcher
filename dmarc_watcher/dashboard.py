@@ -88,7 +88,7 @@ PAGE = """<!DOCTYPE html>
 <div class="bar">
   <button id="all">Select all</button>
   <button id="none">Clear</button>
-  <input type="text" id="note" placeholder="note (optional), e.g. Windermere forwarder">
+  <input type="text" id="note" placeholder="note (optional), e.g. known forwarder">
   <button class="primary" id="ack" disabled>Acknowledge selected</button>
 </div>
 <div class="note">Acknowledging keeps the record but stops it counting toward the
