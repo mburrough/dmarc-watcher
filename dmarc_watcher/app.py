@@ -157,9 +157,9 @@ class DmarcTray:
             self.last_check = datetime.now()
             self.last_problems = res.problems
 
-            muted = self.store.apply_mutes()
-            if muted:
-                log.info("auto-acknowledged %d record(s) by mute rule", muted)
+            if res.auto_acked:
+                log.info("auto-acknowledged %d record(s) by mute rule",
+                         res.auto_acked)
             failing = [r for r in new_reports if not r.is_clean]
             # A mute means "I already know about this source", so a report
             # whose failures were all auto-acknowledged must not re-alert.
@@ -191,7 +191,7 @@ class DmarcTray:
                 self.last_error = None
                 self.grace_attempts += 1
                 log.info("waiting for source, attempt %d (%s), retry in %ds",
-                         self.grace_attempts, exc, self.retry_seconds)
+                         self.grace_attempts, exc, self._retry_delay())
             else:
                 self.waiting_for_source = False
                 self.last_error = str(exc)
@@ -224,6 +224,17 @@ class DmarcTray:
                 self._refresh_ui()
             except Exception:
                 log.exception("failed to refresh tray UI")
+
+    def _retry_delay(self) -> int:
+        """Back off while waiting, instead of retrying at a fixed interval.
+
+        Each attempt is a real IMAP LOGIN and Bridge rate-limits after a
+        handful of failures, so a flat 30s retry across a 10-minute grace
+        window would be twenty logins and would trip the very limit being
+        waited out. Doubling keeps it to a few attempts.
+        """
+        delay = self.retry_seconds * (2 ** max(0, self.grace_attempts - 1))
+        return int(min(delay, self.poll_seconds))
 
     def _in_startup_grace(self) -> bool:
         """True while a transient failure is still explainable by slow startup.
@@ -348,7 +359,7 @@ class DmarcTray:
         self.check()
         while True:
             # Poll fast while still waiting for Bridge, normally otherwise.
-            wait = self.retry_seconds if self.waiting_for_source else self.poll_seconds
+            wait = self._retry_delay() if self.waiting_for_source else self.poll_seconds
             if self._stop.wait(wait):
                 return
             self.check()

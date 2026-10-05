@@ -191,8 +191,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"error: {exc}", file=sys.stderr)
                 return 2
             note = f", marked {res.marked_read} read" if res.marked_read else ""
+            acked = f", {res.auto_acked} auto-acked by mute" if res.auto_acked else ""
             print(f"Fetched {len(res.new_reports)} new report(s), "
-                  f"{res.duplicates} already seen{note}.")
+                  f"{res.duplicates} already seen{note}{acked}.")
             if res.unparseable_messages:
                 print(f"warning: {res.unparseable_messages} message(s) held no "
                       f"readable report (left unread)", file=sys.stderr)

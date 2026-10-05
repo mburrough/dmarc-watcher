@@ -47,10 +47,16 @@ def _login_error(raw: str, user: str) -> FetchError:
     """
     low = raw.lower()
     if "no such user" in low:
-        return FetchError(
-            f"Bridge does not recognise {user!r}. Use the exact address shown "
-            f"in the Proton Bridge window (select your account -> Mailbox "
-            f"details / Configure), set it as imap.user, then re-run "
+        # Ambiguous, and transient far more often than not: Bridge opens its
+        # IMAP listener before it finishes loading the account, so a correct
+        # address is rejected this way for the first minute or so after a cold
+        # boot. Treated as transient, which only defers the alert -- a genuinely
+        # wrong address still reports once the startup grace window closes.
+        return TransientFetchError(
+            f"Bridge does not (yet) recognise {user!r}. It rejects even a "
+            f"correct address while still starting. If this persists, use the "
+            f"exact address from the Proton Bridge window (your account -> "
+            f"Mailbox details / Configure), set it as imap.user, and re-run "
             f"--set-password for that address.")
     if "authentication failed" in low or "invalid credentials" in low or "incorrect" in low:
         return FetchError(
@@ -341,6 +347,7 @@ class CollectResult:
     marked_read: int = 0
     problems: list[str] = field(default_factory=list)
     unparseable_messages: int = 0
+    auto_acked: int = 0
 
 
 def collect(source, store: Store) -> CollectResult:
@@ -383,4 +390,7 @@ def collect(source, store: Store) -> CollectResult:
 
         result.marked_read = source.mark_read_uids(to_mark)
 
+    # Apply mutes wherever reports are stored, not just in the tray: otherwise
+    # a CLI check leaves muted failures unacknowledged until the tray next runs.
+    result.auto_acked = store.apply_mutes()
     return result
